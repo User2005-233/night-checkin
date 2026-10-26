@@ -99,6 +99,10 @@ def solve(img_bytes):
 
 
 def load_cred(path):
+    user = os.environ.get("NIGHT_USER", "").strip()
+    pwd = os.environ.get("NIGHT_PASS", "").strip()
+    if user and pwd:
+        return user, pwd
     with open(path, encoding="utf-8-sig") as f:
         lines = [x.strip() for x in f.read().splitlines()]
     if len(lines) < 2 or not lines[0] or not lines[1]:

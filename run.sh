@@ -9,7 +9,11 @@ if [ ! -x ".venv/bin/python" ]; then
     exit 99
 fi
 
-.venv/bin/python auto_checkin.py "$@"
+if [ -f "accounts.json" ]; then
+    .venv/bin/python batch_checkin.py "$@"
+else
+    .venv/bin/python auto_checkin.py "$@"
+fi
 status=$?
 
 echo

@@ -69,6 +69,41 @@ chmod +x setup.sh run.sh
 
 > ⚠️ `token.txt` / `cred.txt` / `sendkey.txt` 已在 `.gitignore` 里，**永远不要提交到 git**，也别发给别人。
 
+### 批量账号（可选）
+
+如果项目根目录存在 `accounts.json`，`run.sh` / `run.bat` 会自动进入批量模式；没有则保持上面的单账号模式。
+
+```json
+{
+  "sendkey": "SCT汇总SendKey",
+  "defaults": {
+    "photos": "photos",
+    "delay_seconds": 1
+  },
+  "accounts": [
+    {
+      "alias": "room301",
+      "user": "2023xxxx",
+      "password": "******",
+      "sendkey": "SCT该同学本人的SendKey",
+      "photos": "photos/room301",
+      "enabled": true
+    }
+  ]
+}
+```
+
+- `alias`：唯一，仅 `A-Z a-z 0-9 . _ -`，用于 `.state/<alias>/token.txt`
+- `photos`：每个账号**自己的照片目录**（不同宿舍不要共用底图），至少 1 张 jpg
+- `enabled: false`：临时停用该账号
+- token 自动写 `.state/<alias>/token.txt`，不会写回 JSON
+- **顶层 `sendkey` = 你的汇总**：批量结束后只给你发一条汇总（缺省回退 `SERVERCHAN_SENDKEY` / `sendkey.txt`）
+- **账号内 `sendkey` = 该同学本人**：只有**签到成功**时用这个 key 推到他手机；已签/失败不打扰本人
+- 未配置账号内 `sendkey` 时，不推本人，只进入你的汇总
+- 每天最多 1 条正常汇总；当天出现失败时最多再补 1 条失败汇总
+- `accounts.json`、`.state/`、`photos/` 已加入 `.gitignore`；Debian 上建议 `chmod 600 accounts.json`
+- 批量模式支持 `--dry-run`、`--test-push`；`--test-login` 等单账号测试请直接运行 `auto_checkin.py`
+
 ## 使用（以下命令都用 `.venv` 的 python 跑）
 
 - **手动跑一次**：Windows 双击 `run.bat`；Debian 在项目目录运行 `./run.sh`
@@ -93,6 +128,8 @@ Debian 桌面环境安装 `libnotify-bin` 后可用 `notify-send` 显示本机�
 
 - `auto_checkin.py` —— 主流程：查规则 → 查状态 → 改图 → 上传 → 提交 → 复查 → 通知
 - `auto_login.py` —— 自动续期：拿验证码 → OCR 识别 → 带签名登录（签名算法复刻自前端，纯本地计算）
+- `batch_checkin.py` —— 批量调度：读 accounts.json → 逐账号执行 → 汇总推送一条
+- `accounts.json` —— 批量账号配置（可选，gitignore）
 - `run.bat` —— 双击手动跑签到（调用 `.venv`）
 - `setup.bat` —— 双击建 `.venv` + 装依赖 + 验证
 - `run.sh` / `setup.sh` —— Debian 手动运行及环境安装脚本

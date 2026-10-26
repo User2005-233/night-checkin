@@ -10,3 +10,6 @@ __pycache__/
 .venv/
 .pip-tmp/
 .pip-cache/
+accounts.json
+.state/
+photos/

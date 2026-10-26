@@ -51,13 +51,21 @@ except ImportError as _e:
 BASE = "https://xg.tjise.edu.cn/dr/api"
 TYPE = 2  # 1=晨练打卡，2=晚归签到
 TIMEOUT = 20
-VER = "2026.10.15f"  # 改动一次 bump 一次，对版本号就知道是不是旧拷贝
+VER = "2026.10.27a"  # 改动一次 bump 一次，对版本号就知道是不是旧拷贝
 
 HERE = _HERE
-TOKEN_FILE = os.path.join(HERE, "token.txt")
-CRED_FILE = os.path.join(HERE, "cred.txt")
+LABEL = os.environ.get("NIGHT_LABEL", "").strip()
+TOKEN_FILE = os.environ.get("NIGHT_TOKEN_FILE") or os.path.join(HERE, "token.txt")
+CRED_FILE = os.environ.get("NIGHT_CRED_FILE") or os.path.join(HERE, "cred.txt")
+PHOTOS_DIR = os.environ.get("NIGHT_PHOTOS_DIR") or HERE
+if not os.path.isabs(PHOTOS_DIR):
+    PHOTOS_DIR = os.path.join(HERE, PHOTOS_DIR)
 HASH_LOG = os.path.join(HERE, "used_hashes.log")
 TOKEN_HIST = os.path.join(HERE, "token_history.log")
+_NO_NOTIFY = False
+_NO_TOAST = False
+_NO_PUSH = False
+_PUSH_SUCCESS_ONLY = False
 
 
 def token_fp(t):
@@ -68,8 +76,9 @@ def token_fp(t):
 def hist_note(fp, event):
     try:
         with open(TOKEN_HIST, "a", encoding="utf-8") as f:
-            f.write("%s fp=%s %s\n"
-                    % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), fp, event))
+            f.write("%s %sfp=%s %s\n"
+                    % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                       ("[%s] " % LABEL) if LABEL else "", fp, event))
     except OSError:
         pass
 
@@ -102,8 +111,9 @@ CHECKIN_LOG = os.path.join(HERE, "checkin.log")
 
 
 def log(*a):
-    line = "%s %s" % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                      " ".join(str(x) for x in a))
+    line = "%s %s%s" % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        ("[%s] " % LABEL) if LABEL else "",
+                        " ".join(str(x) for x in a))
     try:  # 文件优先：pythonw 无窗口时 stdout 可能是 None，print 会炸
         with open(CHECKIN_LOG, "a", encoding="utf-8") as f:
             f.write(line + "\n")
@@ -117,6 +127,8 @@ def log(*a):
 
 def notify(title, msg):
     """Send a local desktop notification when supported by the current OS."""
+    if _NO_NOTIFY or _NO_TOAST:
+        return
     if sys.platform.startswith("linux"):
         notify_send = shutil.which("notify-send")
         if not notify_send:
@@ -172,7 +184,7 @@ def _raise_for_status(response):
 
 
 SENDKEY_FILE = os.path.join(HERE, "sendkey.txt")
-PUSH_LOG = os.path.join(HERE, "push.log")
+PUSH_LOG = os.environ.get("NIGHT_PUSH_LOG") or os.path.join(HERE, "push.log")
 PUSH_DAILY_CAP = 3  # 每天最多推 3 条，防刷屏也防额度烧完
 _SENDKEY = ""
 
@@ -190,13 +202,13 @@ def load_sendkey(cli_key):
 
 
 def pushed_success_today():
-    """今日是否已推过签到成功（防重复打扰）"""
+    """今日是否已推过成功/已签（防重复打扰）"""
     if not os.path.exists(PUSH_LOG):
         return False
     today = datetime.now().strftime("%Y-%m-%d")
     with open(PUSH_LOG, encoding="utf-8", errors="ignore") as f:
         for line in f:
-            if line.startswith(today) and "success" in line:
+            if line.startswith(today) and ("success" in line or "already" in line):
                 return True
     return False
 
@@ -221,8 +233,12 @@ def push_sent_today():
 def push_phone(sendkey, title, desp, kind="alert"):
     """Server酱推微信（免费每天 5 条）；
     自身失败只记日志绝不抛异常；SendKey 永不打印。"""
-    if not sendkey:
+    if _NO_NOTIFY or _NO_PUSH or not sendkey:
         return
+    if _PUSH_SUCCESS_ONLY and kind != "success":
+        return
+    if LABEL:
+        desp = "账号：%s\n%s" % (LABEL, desp)
     try:
         if push_sent_today() >= PUSH_DAILY_CAP:
             log("推送限流：今日已达上限，跳过")
@@ -248,22 +264,33 @@ def alert(title, msg):
     push_phone(_SENDKEY, title, msg)
 
 
+def has_cred():
+    """有可用账号密码：cred.txt 或批量模式注入的环境变量。"""
+    if os.environ.get("NIGHT_USER") and os.environ.get("NIGHT_PASS"):
+        return True
+    return os.path.exists(CRED_FILE)
+
+
 def refresh_token_or_alert(reason):
     """token 失效时自动登录续期；无 cred.txt 则走老路报警。
     返回新 token；续不出来直接 alert 并 exit（绝不裸奔）。"""
-    if not os.path.exists(CRED_FILE):
-        alert("自动晚签：token 已过期",
-              reason + "，且无 cred.txt 可自动续期，请手动更新 token.txt")
+    if not has_cred():
+        msg = reason + "，且无 cred.txt/账号凭据可自动续期，请手动更新 token.txt"
+        log("ERROR:", msg)
+        alert("自动晚签：token 已过期", msg)
         sys.exit(1)
     log("token 失效，尝试自动登录续期…")
     try:
         import auto_login
         new = auto_login.do_login(CRED_FILE)
     except ImportError:
+        log("ERROR: 缺登录依赖 ddddocr")
         alert("自动晚签：缺登录依赖", "请 pip install -r requirements.txt 后重跑")
         sys.exit(1)
     except Exception as e:
-        alert("自动晚签：自动续期失败", "%s，请手动更新 token" % str(e)[:200])
+        msg = "%s，请手动更新 token" % str(e)[:200]
+        log("ERROR: 自动续期失败：", msg)
+        alert("自动晚签：自动续期失败", msg)
         sys.exit(1)
     new = new.strip()
     with open(TOKEN_FILE, "w", encoding="utf-8") as f:
@@ -319,14 +346,17 @@ def in_window(rule):
 
 
 def pick_photo(rng):
+    if not os.path.isdir(PHOTOS_DIR):
+        log("ERROR: 照片目录不存在：", PHOTOS_DIR)
+        sys.exit(1)
     cands = sorted(
-        f for f in os.listdir(HERE)
+        f for f in os.listdir(PHOTOS_DIR)
         if f.lower().endswith((".jpg", ".jpeg")) and not f.startswith("out_")
     )
     if not cands:
-        log("ERROR: 目录里没有可用照片")
+        log("ERROR: 目录里没有可用照片：", PHOTOS_DIR)
         sys.exit(1)
-    return os.path.join(HERE, rng.choice(cands))
+    return os.path.join(PHOTOS_DIR, rng.choice(cands))
 
 
 def used_hashes():
@@ -414,15 +444,33 @@ def main():
     ap.add_argument("--test-toast", action="store_true", help="只发一条测试桌面通知")
     ap.add_argument("--test-push", action="store_true", help="只发一条测试推送到手机")
     ap.add_argument("--test-login", action="store_true", help="只测自动登录并写回 token.txt")
+    ap.add_argument("--no-notify", action="store_true",
+                    help="禁用本机通知与手机推送（完全静默）")
+    ap.add_argument("--no-toast", action="store_true",
+                    help="只禁用本机通知，手机推送保留")
+    ap.add_argument("--no-push", action="store_true",
+                    help="只禁用手机推送，本机通知保留")
+    ap.add_argument("--push-success-only", action="store_true",
+                    help="手机推送只在签到成功时发送（批量本人推送用）")
     args = ap.parse_args()
 
-    global _SENDKEY
+    global _SENDKEY, _NO_NOTIFY, _NO_TOAST, _NO_PUSH, _PUSH_SUCCESS_ONLY
+    _NO_NOTIFY = args.no_notify
+    _NO_TOAST = args.no_toast or args.no_notify
+    _NO_PUSH = args.no_push or args.no_notify
+    _PUSH_SUCCESS_ONLY = args.push_success_only
     _SENDKEY = load_sendkey(args.sendkey)
     log("版本：", VER)
-    if _SENDKEY:
+    if _NO_NOTIFY:
+        log("通知：本机通知与手机推送均已禁用")
+    elif _NO_TOAST:
+        log("通知：本机通知已禁用，手机推送保留")
+    elif _SENDKEY:
         log("推送通道：Server酱已配置")
     else:
         log("推送通道未配置：缺 sendkey（--sendkey / SERVERCHAN_SENDKEY / sendkey.txt），手机推送将静默跳过")
+    if _PUSH_SUCCESS_ONLY and not _NO_PUSH:
+        log("推送策略：仅签到成功时向本人推送")
 
     if args.test_push:
         if not _SENDKEY:
@@ -438,7 +486,7 @@ def main():
 
     if args.test_login:
         import auto_login
-        new = auto_login.do_login(CRED_FILE)
+        new = auto_login.do_login(CRED_FILE).strip()
         with open(TOKEN_FILE, "w", encoding="utf-8") as f:
             f.write(new)
         hist_seen(token_fp(new))
@@ -451,7 +499,7 @@ def main():
 
     token = load_token(args.token)
     if not token:
-        if os.path.exists(CRED_FILE):
+        if has_cred():
             log("本地 token 为空，尝试自动登录续期…")
             token = refresh_token_or_alert("本地 token 为空")
         else:
@@ -473,7 +521,7 @@ def main():
             return api_get(sess, path, params)
         except APIHTTPError as e:
             status = getattr(e, "status", None)
-            if status not in (401, 403, 404) or not os.path.exists(CRED_FILE):
+            if status not in (401, 403, 404) or not has_cred():
                 raise
             log("%s HTTP %s，按 token 失效处理，尝试自动续期…" % (reason, status))
             hist_note(fp, "dead")
@@ -534,7 +582,7 @@ def main():
                            date_str,
                            {1: "正常", 2: "晚归"}.get(d.get("dkzt"), d.get("dkzt")),
                            d.get("zxzt"), d.get("dksj")),
-                       kind="success")
+                       kind="already")
         else:
             log("今日已推过成功通知，跳过")
         sys.exit(3)

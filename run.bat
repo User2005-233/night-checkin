@@ -8,7 +8,11 @@ if not exist ".venv\Scripts\python.exe" (
     pause
     exit /b 99
 )
-.venv\Scripts\python.exe auto_checkin.py
+if exist "accounts.json" (
+    .venv\Scripts\python.exe batch_checkin.py %*
+) else (
+    .venv\Scripts\python.exe auto_checkin.py %*
+)
 echo.
-echo Exit code %errorlevel%: 0=ok 1=failed(check log/Toast) 2=out of window 3=already signed 4=no task tonight 9=crashed 99=missing deps
+echo Exit code %errorlevel%: 0=ok 1=failed(check log/push) 2=out of window 3=already signed 4=no task tonight 9=crashed 99=missing deps
 pause
