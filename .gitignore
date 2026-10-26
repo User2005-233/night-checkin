@@ -8,3 +8,5 @@ push.log
 token_history.log
 __pycache__/
 .venv/
+.pip-tmp/
+.pip-cache/

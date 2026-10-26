@@ -12,6 +12,11 @@ import os
 import random
 import time
 
+# 防止系统代理（如科学上网、校园网中间人）把请求拦截导致 ProxyError
+for _k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+    os.environ.pop(_k, None)
+del _k
+
 import requests
 
 BASE = "https://xg.tjise.edu.cn/dr/api"
@@ -94,7 +99,7 @@ def solve(img_bytes):
 
 
 def load_cred(path):
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         lines = [x.strip() for x in f.read().splitlines()]
     if len(lines) < 2 or not lines[0] or not lines[1]:
         raise ValueError("cred.txt 格式不对：第1行账号，第2行密码")
@@ -137,7 +142,7 @@ def do_login(cred_path):
             last_err = "HTTP %s 非 JSON：%s" % (r.status_code, r.text[:150])
             continue  # 网络层抖动：换验证码重试
         if d.get("code") == 1 and (d.get("data") or {}).get("token"):
-            return d["data"]["token"]
+            return str(d["data"]["token"]).strip()
         last_err = "%s %s" % (d.get("code"), d.get("message"))
         msg = str(d.get("message") or "")
         if any(k in msg for k in ("密码", "账号", "用户不", "锁定", "冻结", "停用")):

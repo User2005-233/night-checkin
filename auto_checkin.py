@@ -26,6 +26,11 @@ from datetime import datetime
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
+# 防止系统代理（如科学上网、校园网中间人）把请求拦截导致 ProxyError
+for _k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+    os.environ.pop(_k, None)
+del _k
+
 
 def _bootstrap_log(msg):
     """解释器级保底日志：只用标准库，import 炸了也能留下字"""
@@ -144,7 +149,9 @@ def notify(title, msg):
 
 
 class APIHTTPError(RuntimeError):
-    pass
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 def _raise_for_status(response):
@@ -154,8 +161,14 @@ def _raise_for_status(response):
         path = requests.utils.urlparse(response.url).path
         message = "学工 API 返回 HTTP %s %s" % (response.status_code, path)
         if response.status_code == 404:
-            message += "；接口未找到，请检查 API 地址或服务端接口状态（这不是 Debian 系统错误）"
-        raise APIHTTPError(message) from e
+            message += "；受保护接口缺少/失效 token 时网关会用 404 隐藏路由"
+        try:
+            snippet = response.text[:200].replace("\n", " ")
+        except Exception:
+            snippet = ""
+        if snippet:
+            message += "；响应：" + snippet
+        raise APIHTTPError(message, response.status_code) from e
 
 
 SENDKEY_FILE = os.path.join(HERE, "sendkey.txt")
@@ -171,7 +184,7 @@ def load_sendkey(cli_key):
     if k:
         return k
     if os.path.exists(SENDKEY_FILE):
-        with open(SENDKEY_FILE, encoding="utf-8") as f:
+        with open(SENDKEY_FILE, encoding="utf-8-sig") as f:
             return f.read().strip()
     return ""
 
@@ -252,6 +265,7 @@ def refresh_token_or_alert(reason):
     except Exception as e:
         alert("自动晚签：自动续期失败", "%s，请手动更新 token" % str(e)[:200])
         sys.exit(1)
+    new = new.strip()
     with open(TOKEN_FILE, "w", encoding="utf-8") as f:
         f.write(new)
     hist_seen(token_fp(new))
@@ -259,18 +273,28 @@ def refresh_token_or_alert(reason):
     return new
 
 
+def normalize_token(raw):
+    """兼容从浏览器复制的各种形态：空白、引号、xgUniToken= 前缀。"""
+    t = (raw or "").strip()
+    for prefix in ("xguniToken=", "xguniToken:", "token=", "token:"):
+        if t.lower().startswith(prefix.lower()):
+            t = t[len(prefix):].strip()
+            break
+    if len(t) >= 2 and t[0] == t[-1] and t[0] in ("'", '"'):
+        t = t[1:-1].strip()
+    return t
+
+
 def load_token(cli_token):
     if cli_token:
-        return cli_token.strip()
-    t = os.environ.get("XGUNI_TOKEN", "").strip()
+        return normalize_token(cli_token)
+    t = normalize_token(os.environ.get("XGUNI_TOKEN", ""))
     if t:
         return t
     if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, encoding="utf-8") as f:
-            return f.read().strip()
-    log("ERROR: 未找到 token（--token / 环境变量 XGUNI_TOKEN / token.txt）")
-    alert("自动晚签：缺 token", "没找到可用 token，请更新 token.txt 后重跑")
-    sys.exit(1)
+        with open(TOKEN_FILE, encoding="utf-8-sig") as f:
+            return normalize_token(f.read())
+    return ""
 
 
 def api_get(sess, path, params=None):
@@ -426,11 +450,37 @@ def main():
     log("seed =", seed)
 
     token = load_token(args.token)
+    if not token:
+        if os.path.exists(CRED_FILE):
+            log("本地 token 为空，尝试自动登录续期…")
+            token = refresh_token_or_alert("本地 token 为空")
+        else:
+            log("ERROR: 没有可用 token（--token / 环境变量 XGUNI_TOKEN / token.txt）")
+            alert("自动晚签：缺 token",
+                  "没找到可用 token，请更新 token.txt，或放入 cred.txt 以便自动续期")
+            sys.exit(1)
     fp = token_fp(token)
     hist_seen(fp)  # 记录该 token 寿命起点（只存指纹）
     sess = requests.Session()
     sess.headers.update({"token": token, "content-type": "application/json",
                          "User-Agent": UA})
+
+    def api_get_auth(path, params=None, reason="查询"):
+        """受保护接口遇到 401/403/404 时按 token 失效处理，续期后重试一次。
+        元小元网关在缺少/空 token 时会用 404 隐藏路由，不能当成接口不存在。"""
+        nonlocal token, fp
+        try:
+            return api_get(sess, path, params)
+        except APIHTTPError as e:
+            status = getattr(e, "status", None)
+            if status not in (401, 403, 404) or not os.path.exists(CRED_FILE):
+                raise
+            log("%s HTTP %s，按 token 失效处理，尝试自动续期…" % (reason, status))
+            hist_note(fp, "dead")
+            token = refresh_token_or_alert("%s被拒（HTTP %s）" % (reason, status))
+            fp = token_fp(token)
+            sess.headers.update({"token": token})
+            return api_get(sess, path, params)
 
     today = datetime.now()
     date_str = today.strftime("%Y-%m-%d")
@@ -440,7 +490,7 @@ def main():
     dkdz = (WEEKDAY_DKDZ if is_weekday else WEEKEND_DKDZ) or None
     log("日期：", date_str, "周内" if is_weekday else "周末", "->", zxzt)
 
-    rule = api_get(sess, "/dorm/dormCheckInRule/detail")
+    rule = api_get_auth("/dorm/dormCheckInRule/detail", reason="规则查询")
     if rule.get("code") != 1:
         # 该接口无任何参数，非 1 只可能是 token 失效：先自动续一次
         log("ERROR: 规则查询失败：", json.dumps(rule, ensure_ascii=False)[:200])
@@ -459,8 +509,8 @@ def main():
         log("未在打卡时间内，不提交")
         sys.exit(2)
 
-    st = api_get(sess, "/dorm/dormCheckInRecord/stuCheckInDetail",
-                 {"date": date_str, "type": TYPE})
+    st = api_get_auth("/dorm/dormCheckInRecord/stuCheckInDetail",
+                      {"date": date_str, "type": TYPE}, reason="状态查询")
     if st.get("code") != 1:
         # 该接口只读今晚状态，非 1 只可能是 token 失效：先自动续一次
         log("ERROR: 状态查询失败：", json.dumps(st, ensure_ascii=False)[:200])
