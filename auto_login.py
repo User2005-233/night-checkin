@@ -31,6 +31,17 @@ def _nonce():
     return hashlib.sha256(s.encode()).hexdigest()[:32]
 
 
+def _raise_for_status(response):
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as e:
+        path = requests.utils.urlparse(response.url).path
+        message = "登录 API 返回 HTTP %s %s" % (response.status_code, path)
+        if response.status_code == 404:
+            message += "；接口未找到，请检查 API 地址或服务端接口状态（这不是 Debian 系统错误）"
+        raise RuntimeError(message) from e
+
+
 def sign_headers(method, api_path, data, ts=None, nonce=None):
     """复刻 K0：返回 X-Page-Ticket/X-Timestamp/X-Nonce/X-Token。
     ts/nonce 留参只为用抓包真值验签，平时传 None 自动生成。"""
@@ -63,7 +74,7 @@ def sign_headers(method, api_path, data, ts=None, nonce=None):
 def fetch_captcha(sess):
     r = sess.post(BASE + "/auth/captcha", json={"client": CLIENT, "userType": "1"},
                   timeout=TIMEOUT)
-    r.raise_for_status()
+    _raise_for_status(r)
     d = r.json()
     if d.get("code") != 1:
         raise RuntimeError("拿验证码失败: %s" % json.dumps(d, ensure_ascii=True)[:200])
@@ -119,6 +130,7 @@ def do_login(cred_path):
         h["content-type"] = "application/json"
         r = sess.post(BASE + "/auth/login", data=raw, headers=h,
                       timeout=TIMEOUT)
+        _raise_for_status(r)
         try:
             d = r.json()
         except Exception:

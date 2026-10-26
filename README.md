@@ -41,20 +41,22 @@
 
 ## 安装（项目独立虚拟环境）
 
-下载Python 3.14！！！，安装时勾选 **Add to PATH** ！！！！！！！！
+需要 Python 3.10 或更高版本。Windows 用户安装 Python 时勾选 **Add to PATH**。
 
-**直接双击 `setup.bat` ，对应手动配置如下**
+**Windows：**直接双击 `setup.bat`。
 
 - 如果没有 `.venv` 就创建 → 装 `requirements.txt` → 当场验证 import，全绿才算完。慢的话按它的提示换清华镜像重装（不写 pip 配置）。
 
-手动版等价命令：
+**Debian：**安装 Python 和 venv 支持，然后运行 `setup.sh`：
 
 ```bash
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
+sudo apt update
+sudo apt install python3 python3-venv
+chmod +x setup.sh run.sh
+./setup.sh
 ```
 
-依赖装进本目录的 `.venv` 里，跟全局 Python 彻底隔离（4 个包：`requests` 调接口、`Pillow` 改图、`ddddocr` 验证码识别、`windows-toasts` 本机通知，外加自动带上的解码库）。以后运行统一用 `(到这里的目录，自己补全)\.venv\Scripts\pythonw.exe`（计划任务无窗口版），两个 bat 已经这么写了。
+依赖装进本目录的 `.venv` 里，跟全局 Python 隔离（`requests` 调接口、`Pillow` 改图、`ddddocr` 验证码识别；Windows 另有 `windows-toasts` 本机通知）。
 
 ## 配置（4 样东西，全放本目录, 后续会使用）
 
@@ -69,16 +71,19 @@ python -m venv .venv
 
 ## 使用（以下命令都用 `.venv` 的 python 跑）
 
-- **手动跑一次**：双击 `run.bat`（黑窗口显示进度，看完按任意键关闭）
-- **只查不签**：`.venv\Scripts\python.exe auto_checkin.py --dry-run`（零副作用，不推送）
+- **手动跑一次**：Windows 双击 `run.bat`；Debian 在项目目录运行 `./run.sh`
+- **只查不签**：Windows `.venv\Scripts\python.exe auto_checkin.py --dry-run`；Debian `./run.sh --dry-run`（零副作用，不推送）
 - **测通知**：`--test-toast`（本机弹窗）、`--test-push`（微信推送）
 - **测自动登录**：`--test-login`（会写回 `token.txt`）
+
+Debian 桌面环境安装 `libnotify-bin` 后可用 `notify-send` 显示本机通知；没有桌面会话或该命令时会跳过本机通知，不影响 Server酱手机推送。可用 `./run.sh --test-toast` 测试本机通知，或用 `./run.sh --test-push` 测试推送。
 
 ## 自动签到
 
 - windows的  **任务计划程序**  中 新建任务——程序填本目录 `.venv\Scripts\pythonw.exe`、参数填 `auto_checkin.py`、起始于填本目录；
 - 触发器每天在你选择的时间执行一次, 勾上"随机延迟"，日志会自动记进 `checkin.log`。
 - 改系统任务要管理员权限。
+- Debian 可在 `crontab -e` 中添加定时任务，命令使用项目目录中 `run.sh` 的绝对路径，例如 `0 21 * * * /path/to/night-checkin/run.sh`。
 
 退出码：`0`=成功，`1`=失败（看日志/等推送），`2`=不在窗口，`3`=已签，`4`=今晚无任务，`9`=崩溃，`99`=缺依赖。
 
@@ -90,6 +95,7 @@ python -m venv .venv
 - `auto_login.py` —— 自动续期：拿验证码 → OCR 识别 → 带签名登录（签名算法复刻自前端，纯本地计算）
 - `run.bat` —— 双击手动跑签到（调用 `.venv`）
 - `setup.bat` —— 双击建 `.venv` + 装依赖 + 验证
+- `run.sh` / `setup.sh` —— Debian 手动运行及环境安装脚本
 - `requirements.txt` —— 依赖
 - `.venv/` —— 项目独立环境（几百 MB，不进 git，换电脑重建即可）
 

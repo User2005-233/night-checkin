@@ -18,6 +18,8 @@ import hashlib
 import json
 import os
 import random
+import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -109,16 +111,51 @@ def log(*a):
 
 
 def notify(title, msg):
-    """Windows 右下角 Toast：不抢焦点（FPS 无感）、无声；
-    游戏全屏/专注辅助开启时只进操作中心。缺库时仅记日志。"""
+    """Send a local desktop notification when supported by the current OS."""
+    if sys.platform.startswith("linux"):
+        notify_send = shutil.which("notify-send")
+        if not notify_send:
+            log("桌面通知未发送：未安装 notify-send；Server酱手机推送不受影响")
+            return
+        try:
+            subprocess.run([notify_send, title, msg], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                           text=True)
+        except (OSError, subprocess.CalledProcessError) as e:
+            log("桌面通知发送失败：", e)
+        return
+
+    if sys.platform == "win32":
+        try:
+            from windows_toasts import Toast, ToastAudio, WindowsToaster
+        except ImportError:
+            log("桌面通知未发送：未安装 windows-toasts")
+            return
+        try:
+            t = Toast()
+            t.text_fields = [title, msg]
+            t.audio = ToastAudio(silent=True)
+            WindowsToaster("自动晚签").show_toast(t)
+        except Exception as e:
+            log("桌面通知发送失败：", e)
+        return
+
+    log("桌面通知未发送：当前平台不支持本地通知")
+
+
+class APIHTTPError(RuntimeError):
+    pass
+
+
+def _raise_for_status(response):
     try:
-        from windows_toasts import Toast, ToastAudio, WindowsToaster
-        t = Toast()
-        t.text_fields = [title, msg]
-        t.audio = ToastAudio(silent=True)
-        WindowsToaster("自动晚签").show_toast(t)
-    except Exception as e:
-        log("通知发送失败（可 python -m pip install windows-toasts）：", e)
+        response.raise_for_status()
+    except requests.HTTPError as e:
+        path = requests.utils.urlparse(response.url).path
+        message = "学工 API 返回 HTTP %s %s" % (response.status_code, path)
+        if response.status_code == 404:
+            message += "；接口未找到，请检查 API 地址或服务端接口状态（这不是 Debian 系统错误）"
+        raise APIHTTPError(message) from e
 
 
 SENDKEY_FILE = os.path.join(HERE, "sendkey.txt")
@@ -238,13 +275,13 @@ def load_token(cli_token):
 
 def api_get(sess, path, params=None):
     r = sess.get(BASE + path, params=params, timeout=TIMEOUT)
-    r.raise_for_status()
+    _raise_for_status(r)
     return r.json()
 
 
 def api_post(sess, path, data=None):
     r = sess.post(BASE + path, json=data or {}, timeout=TIMEOUT)
-    r.raise_for_status()
+    _raise_for_status(r)
     return r.json()
 
 
@@ -332,7 +369,7 @@ def dms_upload(sess, path, md5):
                                "identifier": md5, "key": "4", "parent": "0",
                                "relativePath": rel, "totalChunks": 1,
                                "totalSize": size, "type": "4"})
-    up.raise_for_status()
+    _raise_for_status(up)
     uj = up.json()
     if uj.get("code") not in (2001, 2003, 2005):
         raise RuntimeError("chunk 上传失败: %s" % json.dumps(uj, ensure_ascii=False)[:300])
@@ -350,7 +387,7 @@ def main():
     ap.add_argument("--token", default="")
     ap.add_argument("--sendkey", default="", help="Server酱 SendKey（或环境变量 SERVERCHAN_SENDKEY / sendkey.txt）")
     ap.add_argument("--dry-run", action="store_true", help="只查状态不提交")
-    ap.add_argument("--test-toast", action="store_true", help="只发一条测试通知")
+    ap.add_argument("--test-toast", action="store_true", help="只发一条测试桌面通知")
     ap.add_argument("--test-push", action="store_true", help="只发一条测试推送到手机")
     ap.add_argument("--test-login", action="store_true", help="只测自动登录并写回 token.txt")
     args = ap.parse_args()
@@ -493,6 +530,10 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except APIHTTPError as e:
+        log("ERROR:", e)
+        alert("自动晚签：学工 API 请求失败", str(e))
+        sys.exit(1)
     except Exception:
         import traceback
         log("FATAL:", traceback.format_exc()[-1500:])
