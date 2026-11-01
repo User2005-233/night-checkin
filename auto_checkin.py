@@ -51,7 +51,7 @@ except ImportError as _e:
 BASE = "https://xg.tjise.edu.cn/dr/api"
 TYPE = 2  # 1=晨练打卡，2=晚归签到
 TIMEOUT = 20
-VER = "2026.10.27a"  # 改动一次 bump 一次，对版本号就知道是不是旧拷贝
+VER = "2026.10.27b"  # 改动一次 bump 一次，对版本号就知道是不是旧拷贝
 
 HERE = _HERE
 LABEL = os.environ.get("NIGHT_LABEL", "").strip()
@@ -94,13 +94,10 @@ def hist_seen(fp):
         pass
     hist_note(fp, "seen")  # 首次见到该 token：寿命起点
 
-# 工作日=校内（学校地址），六日=校外（地址请按实填写，为空则提交 null）
-WEEKDAY_ZXZT = "校内"
-WEEKDAY_DKDD = "宾水西道"
-WEEKDAY_DKDZ = "天津市西青区宾水西道399号"
-WEEKEND_ZXZT = "校外"
-WEEKEND_DKDD = ""
-WEEKEND_DKDZ = ""
+# 统一按校内签到（不再区分工作日/周末）
+ZXZT = "校内"
+DKDD = "宾水西道"
+DKDZ = "天津市西青区宾水西道399号"
 
 # 通用移动端 UA，仅为过检伪装，不含本机任何真实信息
 UA = ("Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 "
@@ -532,11 +529,10 @@ def main():
 
     today = datetime.now()
     date_str = today.strftime("%Y-%m-%d")
-    is_weekday = today.weekday() < 5  # 周一~周五
-    zxzt = WEEKDAY_ZXZT if is_weekday else WEEKEND_ZXZT
-    dkdd = (WEEKDAY_DKDD if is_weekday else WEEKEND_DKDD) or None
-    dkdz = (WEEKDAY_DKDZ if is_weekday else WEEKEND_DKDZ) or None
-    log("日期：", date_str, "周内" if is_weekday else "周末", "->", zxzt)
+    zxzt = ZXZT
+    dkdd = DKDD or None
+    dkdz = DKDZ or None
+    log("日期：", date_str, "->", zxzt)
 
     rule = api_get_auth("/dorm/dormCheckInRule/detail", reason="规则查询")
     if rule.get("code") != 1:
